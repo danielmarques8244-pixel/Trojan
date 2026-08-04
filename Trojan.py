@@ -272,3 +272,11 @@ except Exception as error:
 #pyinstaller -F --clean -w;
 
 #intale tudo no terminal e nao execute o .exe key;
+
+#ofuscação
+
+#pip install pyarmor
+
+#cd caminho/do/projeto
+
+#pyarmor gen main.py
