@@ -23,8 +23,10 @@ def receber_mensagem(sock):
     try:
         bytes_do_tamanho = receber_bytes_exatos(sock, 4)
         tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
+        
         if tamanho_do_payload > MAX_PAYLOAD_SIZE:
             raise ValueError()
+            
         return receber_bytes_exatos(sock, tamanho_do_payload)
     except (ConnectionResetError, struct.error, socket.error, ValueError):
         return None
