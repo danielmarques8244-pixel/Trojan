@@ -43,8 +43,7 @@ def start_server():
         
     try:
         client_socket, client_address = server.accept()
-        print(f"[+] Conexão aceita de {client_address}:{client_address}")
-        
+        print(f"[+] Conexão aceita de {client_address[0]}:{client_address[1]}")
         client_socket.settimeout(1.0)
         
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
