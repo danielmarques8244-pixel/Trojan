@@ -1,4 +1,3 @@
-
 import socket
 import sys
 import threading
@@ -116,7 +115,7 @@ LANGUAGES = {
 }
 
 LISTEN_IP = "0.0.0.0"
-PORT = 443
+PORT = 8443
 
 class C2Server:
     def __init__(self):
@@ -315,7 +314,7 @@ class C2Server:
             if self.client_socket:
                 try:
                     self.client_socket.close()
-                except:
+                except Exception as e:
                     pass
             server.close()
             print("\n[*] Server shutdown")
