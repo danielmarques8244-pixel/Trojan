@@ -1,12 +1,13 @@
 import os
 import base64
+import struct
 
 class SecureChannel:
     def __init__(self, key=None):
         self.key = key or os.urandom(32)
     
     def set_key(self, key):
-        self.key = key.encode() if isinstance(key, str) else key
+        self.key = key if isinstance(key, bytes) else key.encode('utf-8')
     
     def xor_crypt(self, data):
         if isinstance(data, str):
@@ -22,14 +23,29 @@ class SecureChannel:
     
     def decrypt(self, data):
         try:
+            if isinstance(data, str):
+                data = data.encode('utf-8')
             encrypted = base64.b64decode(data)
-            decrypted = self.xor_crypt(encrypted)
-            return decrypted
-        except:
+            return self.xor_crypt(encrypted)
+        except Exception:
             return None
     
-    def encrypt_to_string(self, data):
-        return self.encrypt(data).decode('utf-8')
+    @staticmethod
+    def send_key(sock, key):
+        encoded = base64.b64encode(key)
+        packet = struct.pack(">I", len(encoded)) + encoded
+        sock.sendall(packet)
     
-    def decrypt_from_string(self, data):
-        return self.decrypt(data.encode('utf-8') if isinstance(data, str) else data)
+    @staticmethod
+    def recv_key(sock):
+        length_bytes = sock.recv(4)
+        if len(length_bytes) != 4:
+            raise ConnectionError("Key length receive failed")
+        length = struct.unpack(">I", length_bytes)[0]
+        encoded = b""
+        while len(encoded) < length:
+            chunk = sock.recv(min(4096, length - len(encoded)))
+            if not chunk:
+                raise ConnectionError("Connection closed during key exchange")
+            encoded += chunk
+        return base64.b64decode(encoded)
