@@ -1,9 +1,8 @@
- import struct
-import socket
-import base64
 
-MAX_PAYLOAD_SIZE = 100 * 1024 * 1024
-HEADER_SIZE = 4
+import struct
+import socket
+
+MAX_PAYLOAD = 100 * 1024 * 1024
 
 class ProtocolHandler:
     def __init__(self, crypto=None):
@@ -12,43 +11,55 @@ class ProtocolHandler:
     def send(self, sock, payload):
         if isinstance(payload, str):
             payload = payload.encode('utf-8')
-        elif not isinstance(payload, bytes):
-            payload = str(payload).encode('utf-8')
+        
+        if payload.startswith(b'[FILE]'):
+            msg_type = b'F'
+            payload = payload[6:]
+        elif payload.startswith(b'[SCREENSHOT]'):
+            msg_type = b'S'
+            payload = payload[12:]
+        elif payload.startswith(b'[WEBCAM]'):
+            msg_type = b'W'
+            payload = payload[8:]
+        else:
+            msg_type = b'T'
         
         if self.crypto:
             payload = self.crypto.encrypt(payload)
         
-        if len(payload) > MAX_PAYLOAD_SIZE:
-            raise ValueError("Payload too large")
-        
-        packet = struct.pack(">I", len(payload)) + payload
-        sock.sendall(packet)
+        frame = msg_type + struct.pack(">I", len(payload)) + payload
+        sock.sendall(frame)
     
-    def recv_exact(self, sock, expected_size):
+    def recv_exact(self, sock, size):
         data = b""
-        while len(data) < expected_size:
-            remaining = expected_size - len(data)
-            chunk = sock.recv(min(remaining, 65536))
+        while len(data) < size:
+            chunk = sock.recv(min(65536, size - len(data)))
             if not chunk:
-                raise ConnectionResetError()
+                raise ConnectionError("Connection closed")
             data += chunk
         return data
     
     def receive(self, sock):
         try:
-            header = self.recv_exact(sock, HEADER_SIZE)
-            payload_size = struct.unpack(">I", header)[0]
+            msg_type = sock.recv(1)
+            if not msg_type:
+                return None, None
             
-            if payload_size > MAX_PAYLOAD_SIZE:
-                return None
+            size_data = self.recv_exact(sock, 4)
+            size = struct.unpack(">I", size_data)[0]
             
-            payload = self.recv_exact(sock, payload_size)
+            if size > MAX_PAYLOAD:
+                return None, None
+            
+            payload = self.recv_exact(sock, size)
             
             if self.crypto:
-                decrypted = self.crypto.decrypt(payload)
-                return decrypted
+                payload = self.crypto.decrypt(payload)
+                if payload is None:
+                    return None, None
             
-            return payload
+            type_map = {b'F': 'file', b'S': 'screenshot', b'W': 'webcam', b'T': 'text'}
+            return type_map.get(msg_type, 'unknown'), payload
             
-        except (ConnectionResetError, ConnectionAbortedError, struct.error, socket.error):
-            return None
+        except (ConnectionError, struct.error, socket.error):
+            return None, None
