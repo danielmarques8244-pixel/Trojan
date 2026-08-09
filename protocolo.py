@@ -1,30 +1,54 @@
-import struct
+ import struct
 import socket
+import base64
 
-MAX_PAYLOAD_SIZE = 10 * 1024 * 1024
+MAX_PAYLOAD_SIZE = 100 * 1024 * 1024
+HEADER_SIZE = 4
 
-def enviar_mensagem(sock, payload):
-    if isinstance(payload, str):
-        payload = payload.encode('utf-8')
-    pacote = struct.pack(">I", len(payload)) + payload
-    sock.sendall(pacote)
-
-def receber_bytes_exatos(sock, tamanho_esperado):
-    dados_acumulados = b""
-    while len(dados_acumulados) < tamanho_esperado:
-        bytes_restantes = tamanho_esperado - len(dados_acumulados)
-        pacote = sock.recv(bytes_restantes)
-        if not pacote:
-            raise ConnectionResetError()
-        dados_acumulados += pacote
-    return dados_acumulados
-
-def receber_mensagem(sock):
-    try:
-        bytes_do_tamanho = receber_bytes_exatos(sock, 4)
-        tamanho_do_payload = struct.unpack(">I", bytes_do_tamanho)[0]
-        if tamanho_do_payload > MAX_PAYLOAD_SIZE:
-            raise ValueError()
-        return receber_bytes_exatos(sock, tamanho_do_payload)
-    except (ConnectionResetError, struct.error, socket.error, ValueError):
-        return None
+class ProtocolHandler:
+    def __init__(self, crypto=None):
+        self.crypto = crypto
+    
+    def send(self, sock, payload):
+        if isinstance(payload, str):
+            payload = payload.encode('utf-8')
+        elif not isinstance(payload, bytes):
+            payload = str(payload).encode('utf-8')
+        
+        if self.crypto:
+            payload = self.crypto.encrypt(payload)
+        
+        if len(payload) > MAX_PAYLOAD_SIZE:
+            raise ValueError("Payload too large")
+        
+        packet = struct.pack(">I", len(payload)) + payload
+        sock.sendall(packet)
+    
+    def recv_exact(self, sock, expected_size):
+        data = b""
+        while len(data) < expected_size:
+            remaining = expected_size - len(data)
+            chunk = sock.recv(min(remaining, 65536))
+            if not chunk:
+                raise ConnectionResetError()
+            data += chunk
+        return data
+    
+    def receive(self, sock):
+        try:
+            header = self.recv_exact(sock, HEADER_SIZE)
+            payload_size = struct.unpack(">I", header)[0]
+            
+            if payload_size > MAX_PAYLOAD_SIZE:
+                return None
+            
+            payload = self.recv_exact(sock, payload_size)
+            
+            if self.crypto:
+                decrypted = self.crypto.decrypt(payload)
+                return decrypted
+            
+            return payload
+            
+        except (ConnectionResetError, ConnectionAbortedError, struct.error, socket.error):
+            return None
