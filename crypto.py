@@ -1,17 +1,23 @@
 import os
 import base64
 import struct
+import hmac
+import hashlib
 
 class SecureChannel:
     def __init__(self, key=None):
-        self.key = key or os.urandom(32)
+        self.key = key
     
     def set_key(self, key):
-        self.key = key if isinstance(key, bytes) else key.encode('utf-8')
+        if isinstance(key, str):
+            key = key.encode('utf-8')
+        self.key = key
     
     def xor_crypt(self, data):
         if isinstance(data, str):
             data = data.encode('utf-8')
+        if not self.key:
+            return data
         key_len = len(self.key)
         return bytes([data[i] ^ self.key[i % key_len] for i in range(len(data))])
     
@@ -19,29 +25,30 @@ class SecureChannel:
         if isinstance(data, str):
             data = data.encode('utf-8')
         encrypted = self.xor_crypt(data)
-        return base64.b64encode(encrypted)
+        return encrypted
     
     def decrypt(self, data):
+        if data is None:
+            return None
         try:
-            if isinstance(data, str):
-                data = data.encode('utf-8')
-            encrypted = base64.b64decode(data)
-            return self.xor_crypt(encrypted)
+            return self.xor_crypt(data)
         except Exception:
             return None
     
     @staticmethod
     def send_key(sock, key):
+        if isinstance(key, str):
+            key = key.encode('utf-8')
         encoded = base64.b64encode(key)
         packet = struct.pack(">I", len(encoded)) + encoded
         sock.sendall(packet)
     
     @staticmethod
     def recv_key(sock):
-        length_bytes = sock.recv(4)
-        if len(length_bytes) != 4:
+        length_data = sock.recv(4)
+        if len(length_data) != 4:
             raise ConnectionError("Key length receive failed")
-        length = struct.unpack(">I", length_bytes)[0]
+        length = struct.unpack(">I", length_data)[0]
         encoded = b""
         while len(encoded) < length:
             chunk = sock.recv(min(4096, length - len(encoded)))
